@@ -15,6 +15,7 @@ import {
   InvalidTaskStateError
 } from "../../../domain/errors/index.js";
 import { Logger } from "../../../shared/logger/Logger.js";
+import mongoose from "mongoose";
 
 export class CompleteTask {
   constructor(
@@ -72,33 +73,36 @@ export class CompleteTask {
 
       throw err;
     }
+    const session=await mongoose.startSession();
+    session.startTransaction();
+    try{
+        await this.taskRepository.update(task,session);
+        const taskAudit = new TaskAudit(
+          null,
+          taskId,
+          TaskAuditAction.TASK_COMPLETED,
+          requestBy,
+          new Date()
+        );
+        await this.auditRepository.save(taskAudit,session);
+        await session.commitTransaction();
 
-    await this.taskRepository.update(task);
+        this.logger.info("Task completed and audit committed", {
+          taskId,
+          requestBy
+        });
 
-    this.logger.info("Task completed successfully", {
-      taskId,
-      requestBy
-    });
-
-    const taskAudit = new TaskAudit(
-      null,
-      taskId,
-      TaskAuditAction.TASK_COMPLETED,
-      requestBy,
-      new Date()
-    );
-
-    try {
-      await this.auditRepository.save(taskAudit);
-    } catch {
-      this.logger.error("Failed to record task completion audit", {
+    }catch(err){
+      await session.abortTransaction();
+      this.logger.error("CompleteTask failed, transaction rolled back", {
         taskId,
-        requestBy
+        requestBy,
+        error:err
       });
 
-      throw new ConflictError(
-        "Failed to record audit for task completion"
-      );
+      throw err;
+    }finally{
+      await session.endSession();
     }
   }
 }

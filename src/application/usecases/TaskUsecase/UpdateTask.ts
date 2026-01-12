@@ -7,6 +7,7 @@ import { TaskAlreadyCompletedError } from "../../../domain/errors/TaskAlreadyCom
 import { ConflictError } from "../../../shared/errors/ConflictError.js";
 import { NotFoundError } from "../../../shared/errors/NotFoundError.js";
 import { Logger } from "../../../shared/logger/Logger.js";
+import mongoose from "mongoose";
 
 export class UpdateTask {
   constructor(
@@ -57,30 +58,36 @@ export class UpdateTask {
       }
       throw err; 
     }
+    const session=await mongoose.startSession();
+    session.startTransaction();
+    try{
+      await this.taskRepository.update(task,session);
+      const taskAudit = new TaskAudit(
+        null,
+        taskId,
+        TaskAuditAction.TASK_UPDATED,
+        updates.requestBy,
+        new Date()
+      ); 
+      await this.auditRepository.save(taskAudit,session);
+      await session.commitTransaction();
+      
+      this.logger.info("Task updated and audit committed", {
+        taskId,
+        requestBy: updates.requestBy
+      });
 
-    await this.taskRepository.update(task);
+    }catch(err){
+      await session.abortTransaction();
+      this.logger.error("UpdateTask failed, transaction rolled back", {
+        taskId,
+        requestBy: updates.requestBy,
+        error: err
+      });
 
-    this.logger.info("Task updated successfully", {
-      taskId,
-      requestBy: updates.requestBy
-    });
-
-    const taskAudit = new TaskAudit(
-      null,
-      taskId,
-      TaskAuditAction.TASK_UPDATED,
-      updates.requestBy,
-      new Date()
-    );
-
-    try {
-      await this.auditRepository.save(taskAudit);
-    } catch {
-      this.logger.error(
-        "Failed to record task update audit",
-        { taskId, requestBy: updates.requestBy }
-      );
-      throw new ConflictError("Failed to record audit for update");
+      throw err;
+    }finally{
+      session.endSession();
     }
   }
 }

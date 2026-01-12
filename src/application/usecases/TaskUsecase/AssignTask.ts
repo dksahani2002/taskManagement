@@ -12,6 +12,7 @@ import {
   InvalidTaskStateError
 } from "../../../domain/errors/index.js";
 import { Logger } from "../../../shared/logger/Logger.js";
+import mongoose from "mongoose";
 
 export class AssignTask {
   constructor(
@@ -50,33 +51,34 @@ export class AssignTask {
 
       throw err;  
     }
+    const session =await mongoose.startSession();
+    session.startTransaction();
+    try{
+        await this.taskRepository.update(task,session);
 
-    await this.taskRepository.update(task);
-
-    this.logger.info("Task assigned successfully", {
-      taskId,
-      assigneeId
-    });
-
-    const audit = new TaskAudit(
-      null,
-      taskId,
-      TaskAuditAction.TASK_ASSIGNED,
-      assigneeId,
-      new Date()
-    );
-
-    try {
-      await this.auditRepository.save(audit);
-    } catch {
-      this.logger.error("Failed to record task assignment audit", {
-        taskId,
-        assigneeId
-      });
-
-      throw new ConflictError(
-        "Failed to record audit for task assignment"
-      );
+        const audit = new TaskAudit(
+          null,
+          taskId,
+          TaskAuditAction.TASK_ASSIGNED,
+          assigneeId,
+          new Date()
+        );
+        await this.auditRepository.save(audit,session);
+        await session.commitTransaction();
+        this.logger.info("Task assigned and audit committed", {
+          taskId,
+          assigneeId
+        });
+      }catch(err) {
+        await session.abortTransaction();
+        this.logger.error("AssignTask failed, transaction rolled back", {
+          taskId,
+          assigneeId,
+          error:err
+        });
+      throw err;
+    }finally{
+      session.endSession();
     }
   }
 }

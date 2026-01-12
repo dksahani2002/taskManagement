@@ -13,6 +13,7 @@ import {
   InvalidTaskStateError
 } from "../../../domain/errors/index.js";
 import { Logger } from "../../../shared/logger/Logger.js";
+import mongoose from "mongoose";
 
 export class CancelTask {
   constructor(
@@ -53,37 +54,41 @@ export class CancelTask {
         throw new BadRequestError(err.message);
       }
 
-      // unexpected → let errorMiddleware log it
+      
       throw err;
     }
-
-    await this.taskRepository.update(task);
-    await this.taskScheduler.cancelTaskJobs(taskId);
-
-    this.logger.info("Task cancelled successfully", {
-      taskId,
-      requestBy
-    });
-
-    const taskAudit = new TaskAudit(
-      null,
-      taskId,
-      TaskAuditAction.TASK_CANCELLED,
-      requestBy,
-      new Date()
-    );
-
+    const session =await mongoose.startSession();
+    session.startTransaction();
     try {
-      await this.auditRepository.save(taskAudit);
-    } catch {
-      this.logger.error("Failed to record task cancellation audit", {
-        taskId,
-        requestBy
-      });
+        await this.taskRepository.update(task,session);
 
-      throw new ConflictError(
-        "Failed to record audit for task cancellation"
-      );
+        const taskAudit = new TaskAudit(
+          null,
+          taskId,
+          TaskAuditAction.TASK_CANCELLED,
+          requestBy,
+          new Date()
+        );
+
+      
+        await this.auditRepository.save(taskAudit,session);
+        await session.commitTransaction();
+        this.logger.info("Task cancelled and audit committed", {
+          taskId,
+          requestBy
+        });
+    } catch(err) {
+          await session.abortTransaction();
+          this.logger.error("CancelTask failed, transaction rolled back", {
+            taskId,
+            requestBy,
+            error :err
+          });
+
+          throw err;
+    }finally{
+      session.endSession();
     }
+     await this.taskScheduler.cancelTaskJobs(taskId);
   }
 }

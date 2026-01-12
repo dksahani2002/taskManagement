@@ -4,9 +4,9 @@ import { TaskModel } from "../model/TaskModel.js";
 import { TaskPriority, TaskStatus } from "../../../domain/enums/enumTask.js";
 import { RepositoryError } from "../../../shared/errors/RepositoryError.js";
 import { logger } from "../../../shared/logger/index.js";
-
+import { ClientSession } from "mongoose";
 export class MongoTaskRepository implements TaskRepository {
-    // Implementation details...
+     
     async find(filters:{
         assigneeId?: string;
         status?: TaskStatus;
@@ -51,9 +51,9 @@ export class MongoTaskRepository implements TaskRepository {
         }
        
     }
-    async create(task:Task): Promise<void> {
+    async create(task:Task,session?:ClientSession): Promise<void> {
         try{
-            const doc =await TaskModel.create({
+            const doc =await TaskModel.create([{
                 title: task.title,
                     description: task.description,
                 
@@ -68,8 +68,8 @@ export class MongoTaskRepository implements TaskRepository {
                     completedAt: task.getCompletedAt(),
                     reminderSentAt: task.getReminderSentAt(),
                     overdueEscalatedAt: task.getOverdueEscalatedAt()
-            })
-            task.setId(doc._id.toString());
+            }],{session});
+            task.setId(doc[0]._id.toString());
         }catch(err){
             logger.error("Failed to create task",{
                 error:err
@@ -81,7 +81,6 @@ export class MongoTaskRepository implements TaskRepository {
     }
     async findById(id: string): Promise<Task | null> {
         try{
-            // MongoDB findById logic here
             const taskDoc=await TaskModel.findById(id);
             if(!taskDoc){
                 return null;
@@ -108,12 +107,12 @@ export class MongoTaskRepository implements TaskRepository {
         }
         
     }
-    async update(task: Task): Promise<void> {
+    async update(task: Task,session?:ClientSession): Promise<void> {
         try{    
-             const taskId = task.getId();  
+            //  const taskId = task.getId();  
 
             await TaskModel.updateOne(
-                { _id: taskId },
+                { _id: task.getId() },
                 {
                 $set: {
                     title: task.title,
@@ -126,7 +125,8 @@ export class MongoTaskRepository implements TaskRepository {
                     reminderSentAt: task.getReminderSentAt(),
                     overdueEscalatedAt: task.getOverdueEscalatedAt(),
                 },
-                }
+                },
+                {session}
             );
 
         }catch(err){

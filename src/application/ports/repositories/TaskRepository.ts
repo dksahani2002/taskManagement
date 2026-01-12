@@ -1,3 +1,4 @@
+import { ClientSession } from "mongoose";
 import { Task } from "../../../domain/entities/Task.js";
 import { TaskStatus } from "../../../domain/enums/enumTask.js";
 export interface TaskRepository {
@@ -9,7 +10,7 @@ export interface TaskRepository {
         page: number;
         limit: number;
     }): Promise<Task[]>;
-    create(task: Task): Promise<void>;
+    create(task: Task,session?:ClientSession): Promise<void>;
     findById(id: string): Promise<Task | null>;
-    update(task: Task): Promise<void>;
+    update(task: Task,session?:ClientSession): Promise<void>;
 }

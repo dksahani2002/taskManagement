@@ -9,6 +9,7 @@ import {
   NotFoundError
 } from "../../../shared/errors/index.js";
 import { Logger } from "../../../shared/logger/Logger.js";
+import mongoose from "mongoose";
 
 export class UpdateDueDateTask {
   constructor(
@@ -51,7 +52,38 @@ export class UpdateDueDateTask {
       throw err;  
     }
 
-    await this.taskRepository.update(task);
+    const session=await mongoose.startSession();
+    session.startTransaction();
+    try{
+        await this.taskRepository.update(task,session);
+        const taskAudit = new TaskAudit(
+          null,
+          taskId,
+          TaskAuditAction.TASK_DUEDATE_UPDATED,
+          requestBy,
+          new Date()
+        ); 
+        await this.auditRepository.save(taskAudit,session);
+        await session.commitTransaction();
+
+        this.logger.info("Task due date updated and audit committed", {
+          taskId,
+          newDueAt,
+          requestBy
+        });
+    }catch(err){
+      await session.abortTransaction();
+
+      this.logger.error("UpdateDueDateTask failed, transaction rolled back", {
+        taskId,
+        requestBy,
+        error: err
+      });
+      throw err;
+    }finally{
+      session.endSession();
+    }
+    
 
      
     await this.taskScheduler.cancelTaskJobs(taskId);
@@ -61,33 +93,7 @@ export class UpdateDueDateTask {
       await this.taskScheduler.scheduleOverdueCheck(taskId, task.dueAt);
     }
 
-    await this.taskScheduler.scheduleAutoClose(taskId);
-
-    this.logger.info("Task due date updated successfully", {
-      taskId,
-      newDueAt,
-      requestBy
-    });
-
-    const taskAudit = new TaskAudit(
-      null,
-      taskId,
-      TaskAuditAction.TASK_DUEDATE_UPDATED,
-      requestBy,
-      new Date()
-    );
-
-    try {
-      await this.auditRepository.save(taskAudit);
-    } catch {
-      this.logger.error(
-        "Failed to record task due date update audit",
-        { taskId, requestBy }
-      );
-
-      throw new ConflictError(
-        "Failed to record audit for due date update"
-      );
-    }
+    await this.taskScheduler.scheduleAutoClose(taskId); 
+    
   }
 }

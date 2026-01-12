@@ -7,7 +7,7 @@ import { TaskAudit } from "../../../domain/entities/TaskAudit.js";
 import { TaskAuditAction } from "../../../domain/enums/enumAudittask.js";
 import { ConflictError } from "../../../shared/errors/ConflictError.js";
 import { Logger } from "../../../shared/logger/Logger.js";
-
+import mongoose from "mongoose";
 export class CreateTask {
   constructor(
     private taskRepository: TaskRepository,
@@ -17,54 +17,62 @@ export class CreateTask {
   ) {}
 
   async execute(input: CreateTaskDTO, requestBy: string): Promise<void> {
-    this.logger.info("Creating task", {
-      title: input.title,
-      assigneeId: input.assigneeId,
-      hasDueDate: Boolean(input.dueAt),
-      requestBy
-    });
+    const session=await mongoose.startSession();
+    session.startTransaction();
+    try{
+        this.logger.info("Creating task", {
+          title: input.title,
+          assigneeId: input.assigneeId,
+          hasDueDate: Boolean(input.dueAt),
+          requestBy
+        });
+        const task = new Task(
+          null,
+          input.title,
+          input.description,
+          input.priority,
+          input.dueAt,
+          input.assigneeId
+        ); 
 
-    const task = new Task(
-      null,
-      input.title,
-      input.description,
-      input.priority,
-      input.dueAt,
-      input.assigneeId
-    );
+        await this.taskRepository.create(task,session);
+        const taskId = task.getId();
 
-    await this.taskRepository.create(task);
-    const taskId = task.getId();
+        
+        const taskAudit = new TaskAudit(
+          null,
+          taskId,
+          TaskAuditAction.TASK_CREATED,
+          requestBy,
+          new Date()
+        );
 
-    if (task.dueAt) {
-      await this.taskScheduler.scheduleDueReminder(taskId, task.dueAt);
-      await this.taskScheduler.scheduleOverdueCheck(taskId, task.dueAt);
-    }
 
-    await this.taskScheduler.scheduleAutoClose(taskId);
+        await this.auditRepository.save(taskAudit,session);
+        session.commitTransaction();
+        
 
-    this.logger.info("Task created successfully", {
-      taskId,
-      requestBy
-    });
+        this.logger.info("Task and audit committed successfully", {
+          taskId,
+          requestBy
+        });
 
-    const taskAudit = new TaskAudit(
-      null,
-      taskId,
-      TaskAuditAction.TASK_CREATED,
-      requestBy,
-      new Date()
-    );
+        if (task.dueAt) {
+          await this.taskScheduler.scheduleDueReminder(taskId, task.dueAt);
+          await this.taskScheduler.scheduleOverdueCheck(taskId, task.dueAt);
+        }
 
-    try {
-      await this.auditRepository.save(taskAudit);
-    } catch {
-      this.logger.error("Failed to record task creation audit", {
-        taskId,
+        await this.taskScheduler.scheduleAutoClose(taskId);
+    } catch(err) {
+        await session.abortTransaction();
+        this.logger.error("CreateTask failed, transaction rolled back", {
+        error:err,
         requestBy
       });
 
-      throw new ConflictError("Failed to record audit for task creation");
+        throw err;
+    }finally{
+         session.endSession();
     }
   }
 }
